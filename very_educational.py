@@ -212,4 +212,117 @@ def load_more():
         for it in more.get("items", []):
             st.session_state.mixed_feed.append({
                 "videoId": it["id"],
-                "title": it["snippet"].get
+                "title": it["snippet"].get("title",""),
+                "description": it["snippet"].get("description",""),
+                "thumbnail": it["snippet"].get("thumbnails",{}).get("medium",{}).get("url"),
+                "source":"trending",
+                "publishedAt": it["snippet"].get("publishedAt","")
+            })
+    except Exception:
+        pass
+
+    # fetch more shorts
+    if include_shorts and shorts_query:
+        try:
+            sr = search_shorts(shorts_query, page_token=st.session_state.shorts_token, max_results=per_load)
+            for it in sr.get("items", []):
+                vid = it["id"].get("videoId")
+                snip = it["snippet"]
+                if vid:
+                    st.session_state.mixed_feed.insert(0, {
+                        "videoId": vid,
+                        "title": snip.get("title",""),
+                        "description": snip.get("description",""),
+                        "thumbnail": snip.get("thumbnails",{}).get("medium",{}).get("url"),
+                        "source":"shorts",
+                        "publishedAt": snip.get("publishedAt","")
+                    })
+            st.session_state.shorts_token = sr.get("nextPageToken")
+        except Exception:
+            pass
+
+    # dedupe
+    seen = set()
+    dedup = []
+    for it in st.session_state.mixed_feed:
+        if it["videoId"] not in seen:
+            dedup.append(it)
+            seen.add(it["videoId"])
+    st.session_state.mixed_feed = dedup
+
+# ---------------------------
+# Auto infinite scroll JS (clicks hidden button when near bottom)
+# ---------------------------
+st.markdown("""
+<script>
+const threshold = 700;
+let ticking = false;
+window.addEventListener('scroll', function() {
+  if (ticking) return;
+  ticking = true;
+  window.requestAnimationFrame(() => {
+    const distanceToBottom = document.documentElement.scrollHeight - (window.innerHeight + window.scrollY);
+    if (distanceToBottom < threshold) {
+      const btn = document.getElementById('__load_more_btn');
+      if (btn) btn.click();
+    }
+    ticking = false;
+  });
+});
+</script>
+""", unsafe_allow_html=True)
+
+# hidden button to trigger load_more on the Streamlit side
+if st.button("load_more_trigger", key="__load_more_btn"):
+    load_more()
+    st.experimental_rerun()
+
+# ---------------------------
+# Initialize on first run or when API key / channel changes
+# ---------------------------
+if not API_KEY:
+    st.warning("Please provide a YouTube API key to load content.")
+else:
+    if (not st.session_state.loaded_once) or st.session_state.load_counter == 0:
+        init_feed()
+
+    # ---------------------------
+    # Render feed (grid)
+    # ---------------------------
+    st.markdown("## For You")
+    feed = st.session_state.mixed_feed
+    if not feed:
+        st.info("No videos found. Try another channel name/ID or change region/shorts query.")
+    else:
+        per_row = 3
+        rows = [feed[i:i+per_row] for i in range(0, len(feed), per_row)]
+        for row in rows:
+            cols = st.columns(len(row))
+            for i, item in enumerate(row):
+                with cols[i]:
+                    thumb = item.get("thumbnail") or ""
+                    title = item.get("title") or ""
+                    desc = item.get("description") or ""
+                    pub = item.get("publishedAt") or ""
+                    source = item.get("source") or ""
+                    pub_short = ""
+                    if pub:
+                        try:
+                            pub_short = datetime.fromisoformat(pub.replace("Z","+00:00")).strftime("%b %d, %Y")
+                        except Exception:
+                            pub_short = pub[:10]
+                    st.markdown(f"""
+                        <div class="video-card">
+                          <img class="thumb" src="{thumb}" width="100%"/>
+                          <div class="title">{title}</div>
+                          <div class="meta">{source} • {pub_short}</div>
+                          <div class="desc">{desc[:140]}{'...' if len(desc)>140 else ''}</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                    with st.expander("▶ Play"):
+                        st.video(f"https://www.youtube.com/watch?v={item['videoId']}")
+
+    # footer
+    st.markdown("---")
+    st.caption("Feed mixes Trending, optional Channel uploads, and Shorts (via YouTube Data API). Do not share your API key publicly.")
+
