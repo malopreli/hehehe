@@ -1,328 +1,48 @@
-# app.py
 import streamlit as st
 import requests
-from datetime import datetime
-import time
 
-# ---------------------------
-# Minimal dependencies: streamlit, requests
-# ---------------------------
-st.set_page_config(page_title="The Main One — For You", layout="wide")
-st.markdown("""<style>
-.stApp { background: #0f0f0f; color: #fff; }
-.video-card { background:#151515; padding:10px; border-radius:10px; margin-bottom:12px; }
-.thumb { border-radius:8px; }
-.meta { color:#bdbdbd; font-size:13px; }
-.title { color:#fff; font-weight:600; font-size:15px; margin-top:6px; }
-.desc { color:#ccc; font-size:13px; margin-top:6px; }
-</style>""", unsafe_allow_html=True)
+# ✅ Load your API key from Streamlit secrets
+API_KEY = st.secrets["YOUTUBE_API_KEY"]
 
-st.markdown("<h1 style='text-align:center;'>🎬 The Main One — For You</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align:center;color:#bbb;margin-top:-12px;'>Public feed: Trending • Shorts • Channel videos</p>", unsafe_allow_html=True)
-st.markdown("---")
+st.set_page_config(page_title="The Main One", page_icon="🎬", layout="wide")
 
-# ---------------------------
-# Config & inputs
-# ---------------------------
-YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
+st.title("🎬 The Main One")
+st.write("Search YouTube videos directly — without going to YouTube.com")
 
-# Prefer Streamlit Secrets; fallback to input
-API_KEY = st.secrets.get("YOUTUBE_API_KEY", "")
-if not API_KEY:
-    API_KEY = st.text_input("Enter YouTube API Key (or set YOUTUBE_API_KEY in Streamlit Secrets)", type="password")
+# --- Search bar ---
+query = st.text_input("🔍 Search for videos:", placeholder="Type something like 'Callus Box shorts'...")
 
-col1, col2 = st.columns([3,1])
-with col1:
-    channel_input = st.text_input("Optional channel (channel ID 'UC...' or name) to include", value="")
-with col2:
-    per_load = st.selectbox("Videos per load", [6,9,12,18], index=2)
-
-include_shorts = st.checkbox("Include 'Life Story' Shorts", value=True)
-shorts_query = st.text_input("Shorts search query", value="life story") if include_shorts else ""
-
-region = st.selectbox("Trending region", ["US","GB","DE","IN","CA","AU"], index=0)
-st.markdown("---")
-
-# ---------------------------
-# Helpers: YouTube API wrappers
-# ---------------------------
-def api_get(path, params):
-    params = params.copy()
-    params["key"] = API_KEY
-    r = requests.get(f"{YOUTUBE_API_BASE}/{path}", params=params, timeout=15)
-    r.raise_for_status()
-    return r.json()
-
-def get_channel_id_from_username(username):
-    username = username.strip()
-    if username.startswith("UC"):
-        return username
-    # try forUsername
-    try:
-        data = api_get("channels", {"part":"id", "forUsername": username})
-        if data.get("items"):
-            return data["items"][0]["id"]
-    except Exception:
-        pass
-    # fallback search
-    data = api_get("search", {"part":"snippet", "q": username, "type":"channel", "maxResults":1})
-    if data.get("items"):
-        return data["items"][0]["snippet"]["channelId"]
-    return None
-
-def get_uploads_playlist_id(channel_id):
-    data = api_get("channels", {"part":"contentDetails", "id": channel_id})
-    items = data.get("items", [])
-    if not items:
-        return None
-    return items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
-
-def fetch_playlist_items(playlist_id, page_token=None, max_results=12):
-    params = {"part":"snippet,contentDetails", "playlistId":playlist_id, "maxResults": max_results}
-    if page_token:
-        params["pageToken"] = page_token
-    return api_get("playlistItems", params)
-
-def fetch_most_popular(region_code="US", max_results=12):
-    return api_get("videos", {"part":"snippet,statistics,contentDetails", "chart":"mostPopular", "regionCode":region_code, "maxResults":max_results})
-
-def search_shorts(query, page_token=None, max_results=12):
-    params = {"part":"snippet", "q":query, "type":"video", "videoDuration":"short", "order":"date", "maxResults": max_results}
-    if page_token:
-        params["pageToken"] = page_token
-    return api_get("search", params)
-
-# ---------------------------
-# Session state for feed & pagination
-# ---------------------------
-if "mixed_feed" not in st.session_state:
-    st.session_state.mixed_feed = []
-if "playlist_token" not in st.session_state:
-    st.session_state.playlist_token = None
-if "shorts_token" not in st.session_state:
-    st.session_state.shorts_token = None
-if "uploads_playlist_id" not in st.session_state:
-    st.session_state.uploads_playlist_id = None
-if "loaded_once" not in st.session_state:
-    st.session_state.loaded_once = False
-if "load_counter" not in st.session_state:
-    st.session_state.load_counter = 0
-
-# ---------------------------
-# Load initial content (trending + channel + shorts)
-# ---------------------------
-def init_feed():
-    st.session_state.mixed_feed = []
-    # trending
-    try:
-        tp = fetch_most_popular(region_code=region, max_results=per_load)
-        for it in tp.get("items", []):
-            st.session_state.mixed_feed.append({
-                "videoId": it["id"],
-                "title": it["snippet"].get("title",""),
-                "description": it["snippet"].get("description",""),
-                "thumbnail": it["snippet"].get("thumbnails",{}).get("medium",{}).get("url"),
-                "source":"trending",
-                "publishedAt": it["snippet"].get("publishedAt","")
-            })
-    except Exception as e:
-        st.warning("Could not load trending: " + str(e))
-
-    # channel uploads if provided
-    if channel_input:
-        try:
-            cid = get_channel_id_from_username(channel_input)
-            if cid:
-                pl = get_uploads_playlist_id(cid)
-                if pl:
-                    st.session_state.uploads_playlist_id = pl
-                    resp = fetch_playlist_items(pl, max_results=per_load)
-                    for it in resp.get("items", []):
-                        vid = it["contentDetails"]["videoId"]
-                        snip = it["snippet"]
-                        st.session_state.mixed_feed.append({
-                            "videoId": vid,
-                            "title": snip.get("title",""),
-                            "description": snip.get("description",""),
-                            "thumbnail": snip.get("thumbnails",{}).get("medium",{}).get("url"),
-                            "source":"channel",
-                            "publishedAt": snip.get("publishedAt","")
-                        })
-                    st.session_state.playlist_token = resp.get("nextPageToken")
-        except Exception as e:
-            st.warning("Could not load channel: " + str(e))
-
-    # shorts
-    if include_shorts and shorts_query:
-        try:
-            sr = search_shorts(shorts_query, max_results=per_load)
-            for it in sr.get("items", []):
-                vid = it["id"].get("videoId")
-                snip = it["snippet"]
-                if vid:
-                    st.session_state.mixed_feed.insert(0, {
-                        "videoId": vid,
-                        "title": snip.get("title",""),
-                        "description": snip.get("description",""),
-                        "thumbnail": snip.get("thumbnails",{}).get("medium",{}).get("url"),
-                        "source":"shorts",
-                        "publishedAt": snip.get("publishedAt","")
-                    })
-            st.session_state.shorts_token = sr.get("nextPageToken")
-        except Exception as e:
-            st.warning("Could not load shorts: " + str(e))
-
-    # dedupe by videoId preserving order
-    seen = set()
-    dedup = []
-    for it in st.session_state.mixed_feed:
-        if it["videoId"] not in seen:
-            dedup.append(it)
-            seen.add(it["videoId"])
-    st.session_state.mixed_feed = dedup
-    st.session_state.loaded_once = True
-
-# ---------------------------
-# Load more content (called by hidden button)
-# ---------------------------
-def load_more():
-    st.session_state.load_counter += 1
-    # try to fetch more from uploads playlist
-    if st.session_state.uploads_playlist_id and st.session_state.playlist_token is not None:
-        try:
-            resp = fetch_playlist_items(st.session_state.uploads_playlist_id, page_token=st.session_state.playlist_token, max_results=per_load)
-            for it in resp.get("items", []):
-                vid = it["contentDetails"]["videoId"]
-                snip = it["snippet"]
-                st.session_state.mixed_feed.append({
-                    "videoId": vid,
-                    "title": snip.get("title",""),
-                    "description": snip.get("description",""),
-                    "thumbnail": snip.get("thumbnails",{}).get("medium",{}).get("url"),
-                    "source":"channel",
-                    "publishedAt": snip.get("publishedAt","")
-                })
-            st.session_state.playlist_token = resp.get("nextPageToken")
-        except Exception:
-            pass
-
-    # fetch more trending
-    try:
-        more = fetch_most_popular(region_code=region, max_results=per_load)
-        for it in more.get("items", []):
-            st.session_state.mixed_feed.append({
-                "videoId": it["id"],
-                "title": it["snippet"].get("title",""),
-                "description": it["snippet"].get("description",""),
-                "thumbnail": it["snippet"].get("thumbnails",{}).get("medium",{}).get("url"),
-                "source":"trending",
-                "publishedAt": it["snippet"].get("publishedAt","")
-            })
-    except Exception:
-        pass
-
-    # fetch more shorts
-    if include_shorts and shorts_query:
-        try:
-            sr = search_shorts(shorts_query, page_token=st.session_state.shorts_token, max_results=per_load)
-            for it in sr.get("items", []):
-                vid = it["id"].get("videoId")
-                snip = it["snippet"]
-                if vid:
-                    st.session_state.mixed_feed.insert(0, {
-                        "videoId": vid,
-                        "title": snip.get("title",""),
-                        "description": snip.get("description",""),
-                        "thumbnail": snip.get("thumbnails",{}).get("medium",{}).get("url"),
-                        "source":"shorts",
-                        "publishedAt": snip.get("publishedAt","")
-                    })
-            st.session_state.shorts_token = sr.get("nextPageToken")
-        except Exception:
-            pass
-
-    # dedupe
-    seen = set()
-    dedup = []
-    for it in st.session_state.mixed_feed:
-        if it["videoId"] not in seen:
-            dedup.append(it)
-            seen.add(it["videoId"])
-    st.session_state.mixed_feed = dedup
-
-# ---------------------------
-# Auto infinite scroll JS (clicks hidden button when near bottom)
-# ---------------------------
-st.markdown("""
-<script>
-const threshold = 700;
-let ticking = false;
-window.addEventListener('scroll', function() {
-  if (ticking) return;
-  ticking = true;
-  window.requestAnimationFrame(() => {
-    const distanceToBottom = document.documentElement.scrollHeight - (window.innerHeight + window.scrollY);
-    if (distanceToBottom < threshold) {
-      const btn = document.getElementById('__load_more_btn');
-      if (btn) btn.click();
+# --- Search results ---
+if query:
+    st.write(f"### Results for **{query}**")
+    
+    search_url = "https://www.googleapis.com/youtube/v3/search"
+    params = {
+        "part": "snippet",
+        "q": query,
+        "type": "video",
+        "maxResults": 12,
+        "key": API_KEY,
     }
-    ticking = false;
-  });
-});
-</script>
-""", unsafe_allow_html=True)
 
-# hidden button to trigger load_more on the Streamlit side
-if st.button("load_more_trigger", key="__load_more_btn"):
-    load_more()
-    st.experimental_rerun()
+    response = requests.get(search_url, params=params)
+    data = response.json()
 
-# ---------------------------
-# Initialize on first run or when API key / channel changes
-# ---------------------------
-if not API_KEY:
-    st.warning("Please provide a YouTube API key to load content.")
-else:
-    if (not st.session_state.loaded_once) or st.session_state.load_counter == 0:
-        init_feed()
+    if "items" in data:
+        cols = st.columns(3)
+        for i, item in enumerate(data["items"]):
+            video_id = item["id"]["videoId"]
+            title = item["snippet"]["title"]
+            channel = item["snippet"]["channelTitle"]
+            thumbnail = item["snippet"]["thumbnails"]["medium"]["url"]
+            url = f"https://www.youtube.com/watch?v={video_id}"
 
-    # ---------------------------
-    # Render feed (grid)
-    # ---------------------------
-    st.markdown("## For You")
-    feed = st.session_state.mixed_feed
-    if not feed:
-        st.info("No videos found. Try another channel name/ID or change region/shorts query.")
+            with cols[i % 3]:
+                st.image(thumbnail, use_container_width=True)
+                st.markdown(f"[**{title}**]({url})")
+                st.caption(f"by {channel}")
     else:
-        per_row = 3
-        rows = [feed[i:i+per_row] for i in range(0, len(feed), per_row)]
-        for row in rows:
-            cols = st.columns(len(row))
-            for i, item in enumerate(row):
-                with cols[i]:
-                    thumb = item.get("thumbnail") or ""
-                    title = item.get("title") or ""
-                    desc = item.get("description") or ""
-                    pub = item.get("publishedAt") or ""
-                    source = item.get("source") or ""
-                    pub_short = ""
-                    if pub:
-                        try:
-                            pub_short = datetime.fromisoformat(pub.replace("Z","+00:00")).strftime("%b %d, %Y")
-                        except Exception:
-                            pub_short = pub[:10]
-                    st.markdown(f"""
-                        <div class="video-card">
-                          <img class="thumb" src="{thumb}" width="100%"/>
-                          <div class="title">{title}</div>
-                          <div class="meta">{source} • {pub_short}</div>
-                          <div class="desc">{desc[:140]}{'...' if len(desc)>140 else ''}</div>
-                        </div>
-                    """, unsafe_allow_html=True)
-                    with st.expander("▶ Play"):
-                        st.video(f"https://www.youtube.com/watch?v={item['videoId']}")
+        st.error("No videos found or API limit reached 😔")
 
-    # footer
-    st.markdown("---")
-    st.caption("Feed mixes Trending, optional Channel uploads, and Shorts (via YouTube Data API). Do not share your API key publicly.")
-
+else:
+    st.info("🔎 Type something above to search YouTube videos.")
