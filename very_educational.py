@@ -1,8 +1,10 @@
 import streamlit as st
 import requests
 from typing import List, Dict
-import json 
+import json
 import os
+import requests
+
 # ---------- CONFIGURATION ----------
 st.set_page_config(page_title="🎬 YouTube Search & Watch", page_icon="🎥", layout="wide")
 
@@ -16,12 +18,38 @@ st.caption("Search YouTube videos directly and watch them here — no need to le
 
 # ---------- USER INPUTS ----------
 query = st.text_input("🔍 Search query", placeholder="e.g., relaxing piano music")
-max_results = st.number_input(
-    "Number of videos to display",
-    min_value=1, max_value=50, value=9, step=1,
-    help="YouTube API allows up to 50 results per request."
-)
 search_clicked = st.button("Search", type="primary", use_container_width=True)
+
+# ---------- PROCESSING ----------
+if search_clicked and query:
+    try:
+        from pytube import YouTube
+
+        yt = YouTube(query)
+
+     # ---------- DISPLAY ----------
+        st.success("Metadata extracted successfully!")
+
+   # Thumbnail
+        st.image(yt.thumbnail_url, caption="Thumbnail")
+
+
+        # Metadata JSON
+        metadata = {
+            "title": yt.title,
+            "channel": yt.author,
+            "views": yt.views,
+            "length_seconds": yt.length,
+            "publish_date": str(yt.publish_date),
+            "url": query,
+            "description": yt.description[:300] + "..." if yt.description else ""
+        }
+
+        st.subheader("Video Metadata (JSON)")
+        st.json(metadata)
+
+    except Exception as e:
+        st.error(f"❌ Error: {e}")
 
 # ---------- HELPER FUNCTIONS ----------
 def save_first_result(data: Dict, filename: str = "first_youtube_result.json") -> bool:
