@@ -1,139 +1,61 @@
 import streamlit as st
-import requests
-from typing import List, Dict
-import json
-import os
-import requests
-import pytube 
-# ---------- CONFIGURATION ----------
-st.set_page_config(page_title="🎬 YouTube Search & Watch", page_icon="🎥", layout="wide")
+from pytube import YouTube
+import re
 
-# ✅ Your YouTube Data API key (replace with your own)
-API_KEY = "AIzaSyCRoCfLINI3kMcvvSbMq6sISWnxiOUC4CQ"
-
+# ---------- CONFIG ----------
+st.set_page_config(page_title="🎬 YouTube Metadata Viewer", layout="centered")
 
 # ---------- PAGE HEADER ----------
-st.title("🎬 YouTube Search & Watch")
-st.caption("Search YouTube videos directly and watch them here — no need to leave the app!")
+st.title("🎬 YouTube Metadata Viewer")
+st.caption("Paste a YouTube URL to preview metadata — no downloads are performed.")
 
-# ---------- USER INPUTS ----------
-query = st.text_input("🔍 Search query", placeholder="e.g., relaxing piano music")
-search_clicked = st.button("Search", type="primary", use_container_width=True)
+# ---------- HELPERS ----------
+def normalize_youtube_url(url):
+    """Convert any YouTube URL to standard format for pytube."""
+    match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", url)
+    if match:
+        return f"https://www.youtube.com/watch?v={match.group(1)}"
+    return None
 
-# ---------- PROCESSING ----------
-if search_clicked and query:
-    try:
-        from pytube import YouTube
+# ---------- USER INPUT ----------
+query = st.text_input("🔍 Paste YouTube URL", placeholder="https://www.youtube.com/watch?v=xxxxx")
+search_clicked = st.button("Get Metadata", type="primary", use_container_width=True)
 
-        yt = YouTube(query)
-
-     # ---------- DISPLAY ----------
-        st.success("Metadata extracted successfully!")
-
-   # Thumbnail
-        st.image(yt.thumbnail_url, caption="Thumbnail")
-
-
-        # Metadata JSON
-        metadata = {
-            "title": yt.title,
-            "channel": yt.author,
-            "views": yt.views,
-            "length_seconds": yt.length,
-            "publish_date": str(yt.publish_date),
-            "url": query,
-            "description": yt.description[:300] + "..." if yt.description else ""
-        }
-
-        st.subheader("Video Metadata (JSON)")
-        st.json(metadata)
-
-    except Exception as e:
-        st.error(f"❌ Error: {e}")
-
-# ---------- HELPER FUNCTIONS ----------
-def save_first_result(data: Dict, filename: str = "first_youtube_result.json") -> bool:
-    """Save ONLY the first YouTube search result to a local JSON file."""
-    items = data.get("items", [])
-    if not items:
-        return False
-
-    first_item = items[0]
-
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(first_item, f, indent=2)
-
-    return True
-
-def load_first_result(filename: str = "first_youtube_result.json") -> Dict:
-    if not os.path.exists(filename):
-        return {}
-    with open(filename, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def safe_get(d: Dict, path: List[str], default=None):
-    """Safely access nested dictionary keys."""
-    cur = d
-    for p in path:
-        if not isinstance(cur, dict) or p not in cur:
-            return default
-        cur = cur[p]
-    return cur
-
-def search_youtube(api_key: str, query: str, max_results: int) -> Dict:
-    """Perform a YouTube search using Data API v3."""
-    url = "https://www.googleapis.com/youtube/v3/search"
-    params = {
-        "part": "snippet",
-        "q": query,
-        "type": "video",
-        "maxResults": max_results,
-        "key": api_key,
-        "order": "relevance",
-        "safeSearch": "moderate",
-    }
-    resp = requests.get(url, params=params, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
-    
-# ---------- SEARCH LOGIC ----------
+# ---------- PROCESS ----------
 if search_clicked:
     if not query.strip():
-        st.error("Please enter a **search query**.")
+        st.error("Please enter a YouTube URL.")
     else:
+        query = normalize_youtube_url(query)
+        if not query:
+            st.error("Invalid YouTube URL. Make sure it’s a full video link.")
+            st.stop()
         try:
-            data = search_youtube(API_KEY, query.strip(), int(max_results))
+            yt = YouTube(query)
 
-            # Save ONLY the first result to disk
-            saved = save_first_result(data)
+            st.success("Metadata extracted successfully!")
 
-            if not saved:
-                st.warning("No videos found. Try a different query.")
-                st.stop()
+            # Display thumbnail
+            st.image(yt.thumbnail_url, caption="Thumbnail")
 
-            # Load the first result from disk
-            first_item = load_first_result()
-            video_id = safe_get(first_item, ["id", "videoId"], "")
-            snippet = first_item.get("snippet", {})
-            title = snippet.get("title", "Untitled")
-            channel = snippet.get("channelTitle", "Unknown channel")
+            # Metadata dictionary
+            metadata = {
+                "title": yt.title,
+                "channel": yt.author,
+                "views": yt.views,
+                "length_seconds": yt.length,
+                "publish_date": str(yt.publish_date),
+                "url": query,
+                "description": yt.description[:300] + "..." if yt.description else ""
+            }
 
-            watch_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else None
+            # Display metadata as JSON
+            st.subheader("Video Metadata (JSON)")
+            st.json(metadata)
 
-            st.write(f"### First Result for **{query}**")
-            st.markdown(f"**{title}**")
-            st.caption(f"by {channel}")
-
-            if watch_url:
-                st.video(watch_url)
-            else:
-                st.info("Video unavailable.")
+            # Embed video
+            st.subheader("Embedded Video")
+            st.video(query)
 
         except Exception as e:
-            st.error(f"Unexpected error: {e}")
-
-# ---------- FOOTER ----------
-st.markdown("---")
-st.caption("Built with ❤️ using Streamlit and the YouTube Data API v3.")
-
+            st.error(f"❌ Error processing this URL: {e}")
