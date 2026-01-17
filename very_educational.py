@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 from typing import List, Dict
 import json 
+import os
 # ---------- CONFIGURATION ----------
 st.set_page_config(page_title="🎬 YouTube Search & Watch", page_icon="🎥", layout="wide")
 
