@@ -1,4 +1,5 @@
 import streamlit as st
+pip install pytube
 import requests
 from typing import List, Dict
 import json
